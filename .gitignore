@@ -1,0 +1,13 @@
+# firmware assets are generated locally, never committed
+*.bin
+*.efi
+*.EFI
+
+# local dumps / backups
+backup/
+*.orig.bin
+*.new.bin
+
+# bench scratch
+__pycache__/
+*.pyc
