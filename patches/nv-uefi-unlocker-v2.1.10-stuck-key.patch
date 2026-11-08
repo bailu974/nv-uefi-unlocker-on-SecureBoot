@@ -1,0 +1,72 @@
+--- a/loader/src/keywait.rs
++++ b/loader/src/keywait.rs
+@@ -26,8 +26,18 @@
+     let key = system::with_stdin(|stdin| stdin.read_key());
+     key.ok().flatten()
+ }
+ 
++/// Stuck-key workaround (same class as issue #110, different key): some
++/// laptop ECs synthesise a Ctrl+C (0x03) during firmware boot and keep
++/// re-sending it every poll. A real Ctrl+C means "stop", but a phantom one
++/// makes the tool unusable on that machine, so this build ignores 0x03 in
++/// every abort window. Space/Enter still confirm and every other key still
++/// aborts - the safety semantics are unchanged for real input.
++pub fn is_ignored_stuck_key(key: &Key) -> bool {
++    matches!(key, Key::Printable(c) if u16::from(*c) == 0x03)
++}
++
+ /// Poll the console input roughly every 50 ms.
+ ///
+ /// Fallback-picker semantics (chainload.rs): any key proceeds early,
+ /// timeout proceeds anyway.
+@@ -53,8 +63,12 @@
+ pub fn wait_confirm(seconds: u64) -> Confirm {
+     let ticks = seconds * 20;
+     for _ in 0..ticks {
+         if let Some(key) = poll_key() {
++            if is_ignored_stuck_key(&key) {
++                info!("CONFIRM: ignoring synthetic Ctrl+C (0x03) - stuck-key workaround");
++                continue;
++            }
+             #[cfg(feature = "tx")]
+             match key {
+                 Key::Printable(c) if u16::from(c) == 0x20 => {
+                     info!("CONFIRM: Space pressed, proceeding");
+@@ -103,8 +117,12 @@
+ pub fn wait_confirm_armed(seconds: u64) -> Confirm {
+     let ticks = seconds * 20;
+     for _ in 0..ticks {
+         if let Some(key) = poll_key() {
++            if is_ignored_stuck_key(&key) {
++                info!("CONFIRM: ignoring synthetic Ctrl+C (0x03) during the armed countdown - stuck-key workaround");
++                continue;
++            }
+             #[cfg(feature = "tx")]
+             {
+                 info!(
+                     "CONFIRM: key {key:?} during the {seconds}s armed countdown - ABORT (no GPU writes this boot)"
+--- a/loader/src/tx_prep.rs
++++ b/loader/src/tx_prep.rs
+@@ -136,12 +136,18 @@
+             info!("PREP: {name} begin");
+             prep.step();
+         }
+         if let Some(key) = keywait::poll_key() {
+-            info!(
+-                "CONFIRM: key {key:?} during the {seconds}s armed countdown - ABORT (no GPU writes this boot)"
+-            );
+-            return Confirm::Abort;
++            if keywait::is_ignored_stuck_key(&key) {
++                info!(
++                    "CONFIRM: ignoring synthetic Ctrl+C (0x03) during the {seconds}s armed countdown - stuck-key workaround"
++                );
++            } else {
++                info!(
++                    "CONFIRM: key {key:?} during the {seconds}s armed countdown - ABORT (no GPU writes this boot)"
++                );
++                return Confirm::Abort;
++            }
+         }
+         uefi::boot::stall(Duration::from_millis(50));
+     }
+ }
